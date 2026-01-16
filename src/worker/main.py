@@ -3,6 +3,7 @@ import asyncio
 import redis.asyncio as redis
 import traceback
 from pprint import pprint
+from pymongo import MongoClient
 
 from src.config.settings import settings
 from src.graph.graph import BriefingWorkflow
@@ -25,10 +26,33 @@ async def update_job_status(r, job_id, status, result=None, error=None):
     except Exception as e:
         print(f"[ERROR] Failed to update Redis status: {e}")
 
+# --- DB CALLBACK HELPER ---
+def mark_briefing_complete(user_id: str, run_date: str):
+    """
+    Callback: Updates the user's schedule in MongoDB to confirm the job ran successfully.
+    """
+    try:
+        client = MongoClient(settings.DATABASE_URL)
+        db = client[settings.MONGO_DB_NAME]
+        collection = db["briefing_schedules"]
+        
+        result = collection.update_one(
+            {"_id": user_id},
+            {"$set": {"last_run_date": run_date}}
+        )
+        client.close()
+        
+        if result.modified_count > 0:
+            print(f"[WORKER] 💾 DB Updated: Marked {user_id} as complete for {run_date}")
+        else:
+            print(f"[WORKER] ⚠️ DB Update: No document modified for {user_id}")
+            
+    except Exception as e:
+        print(f"[WORKER] ❌ DB Callback Failed: {e}")
+
 async def run_worker():
     """
     Main Worker Loop for NewsCast.
-    Listens for 'briefing_generation' jobs and executes the audio graph.
     """
     # 1. Initialize Redis
     try:
@@ -55,13 +79,17 @@ async def run_worker():
             queue_name, job_data_raw = result
             job_data = json.loads(job_data_raw)
             job_id = job_data.get("job_id")
+            user_id = job_data.get("user_id")
+
+            # Extract date from job_id (Format: briefing-USER-YYYY-MM-DD)
+            job_date_str = job_id[-10:] 
             
             print(f"[WORKER] 🎙️ Processing Job: {job_id}")
             await update_job_status(r, job_id, "processing")
 
             # 4. Initialize State
             initial_state = BriefingState(
-                user_id=job_data.get("user_id"),
+                user_id=user_id,
                 config=job_data.get("config", {})
             )
 
@@ -75,8 +103,6 @@ async def run_worker():
                     # --- LOGICAL FAILURE ---
                     print(f"[JOB {job_id}] ❌ Logic Failed: {error_message}")
                     await update_job_status(r, job_id, "failed", error=error_message)
-                    
-                    # Optional: Dead Letter Queue logic here
                 else:
                     # --- SUCCESS ---
                     print(f"[JOB {job_id}] ✅ Briefing Generated Successfully.")
@@ -86,6 +112,11 @@ async def run_worker():
                         "transcript": final_state.get("final_audio_transcript")
                     }
                     await update_job_status(r, job_id, "completed", result=result_payload)
+                    
+                    # --- EXECUTE CALLBACK ---
+                    # Run synchronous DB update in a thread
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, mark_briefing_complete, user_id, job_date_str)
 
             except Exception as execution_error:
                 # --- CRITICAL CRASH ---

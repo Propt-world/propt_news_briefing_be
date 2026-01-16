@@ -20,12 +20,12 @@ class Settings(BaseSettings):
 
     # --- Redis Configuration ---
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    REDIS_QUEUE_NAME: str = os.getenv("REDIS_QUEUE_NAME", "newsagent_jobs")
-    REDIS_DLQ_NAME: str = os.getenv("REDIS_DLQ_NAME", "newsagent_dlq")
+    REDIS_QUEUE_NAME: str = os.getenv("REDIS_QUEUE_NAME", "newsbrief_jobs")
+    REDIS_DLQ_NAME: str = os.getenv("REDIS_DLQ_NAME", "newsbrief_dlq")
 
     # --- MongoDB Settings ---
     DATABASE_URL: str = os.getenv('DATABASE_URL', "mongodb://localhost:27017")
-    MONGO_DB_NAME: str = os.getenv('MONGO_DB_NAME', "newsagent")
+    MONGO_DB_NAME: str = os.getenv('MONGO_DB_NAME', "newsbrief")
 
     # Automatic SSL/TLS Handling for AWS DocumentDB
     def __init__(self, **data):
@@ -52,8 +52,9 @@ class Settings(BaseSettings):
     OPIK_PROJECT_NAME: str = os.getenv('OPIK_PROJECT_NAME')
 
     # --- Model Configuration ---
+    # This is used for TEXT generation (Reporters, Editors, etc.)
     MODEL_NAME: str = os.getenv('MODEL_NAME', 'gpt-4o-mini')
-    MODEL_TEMPERATURE: float = float(os.getenv('MODEL_TEMPERATURE', 0.5))
+    MODEL_TEMPERATURE: float = float(os.getenv('MODEL_TEMPERATURE', 0.7))
 
     # --- Email / SMTP Configuration ---
     SMTP_SERVER: str = os.getenv("SMTP_SERVER", "smtp.gmail.com")
@@ -67,7 +68,7 @@ class Settings(BaseSettings):
 
     # --- Scheduler Configuration ---
     MAIN_API_URL: str = os.getenv('MAIN_API_URL', 'http://localhost:8000')
-    SUBMISSION_SOURCE_ID: str = os.getenv('SUBMISSION_SOURCE_ID', 'newsagent_scheduled_source')
+    SUBMISSION_SOURCE_ID: str = os.getenv('SUBMISSION_SOURCE_ID', 'newsbrief_scheduled_source')
     SCHEDULER_URL: str = os.getenv('SCHEDULER_URL', 'http://scheduler:8001')
 
     # =========================================================
@@ -81,7 +82,7 @@ class Settings(BaseSettings):
     # 2. Text-to-Speech (TTS) Configuration
     TTS_PROVIDER: str = os.getenv("TTS_PROVIDER", "openai") 
     
-    # Strictly using the requested model
+    # Strictly using the requested model for AUDIO only
     TTS_MODEL: str = os.getenv("TTS_MODEL", "gpt-4o-mini-tts")
     
     # Default Voice ID (fallback if not in user config)
@@ -111,6 +112,10 @@ class Settings(BaseSettings):
         return opik_tracer
 
     def get_model(self) -> ChatOpenAI:
+        """
+        Returns the Chat Model for Text Generation (Reporters, Editors, etc.)
+        STRICTLY uses MODEL_NAME (gpt-4o-mini).
+        """
         return ChatOpenAI(
             model=self.MODEL_NAME,
             temperature=self.MODEL_TEMPERATURE,

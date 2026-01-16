@@ -27,6 +27,9 @@ class BriefingWorkflow:
         builder.add_node("translator", translate_script)
         builder.add_node("audio_producer", audio_producer)
         builder.add_node("notify", notify_briefing_webhook)
+        
+        # Add the passthrough node strictly for routing
+        builder.add_node("script_finalized", lambda state: state)
 
         # 2. Define Flow
         builder.set_entry_point("fetch_articles")
@@ -40,38 +43,15 @@ class BriefingWorkflow:
             "validate_script",
             check_script_quality,
             {
-                "retry": "chief_editor",      # Failed, try again
-                "force_end": "select_best",   # Failed 3x, pick best fallback
-                "pass": "audio_producer"      # Success! Go to language check? 
-                                              # WAIT: We need to check language first.
-            }
-        )
-        
-        builder.add_conditional_edges(
-            "validate_script",
-            check_script_quality,
-            {
-                "retry": "chief_editor",
-                "force_end": "select_best", 
-                "pass": "translator"
-            }
-        )
-        
-        builder.add_node("script_finalized", lambda state: state) # Passthrough node
-        
-        # Redefine Validation Edges
-        builder.add_conditional_edges(
-            "validate_script",
-            check_script_quality,
-            {
                 "retry": "chief_editor",
                 "force_end": "select_best",
                 "pass": "script_finalized" 
             }
         )
         
+        # Ensure the fallback path reconnects to the main flow
         builder.add_edge("select_best", "script_finalized")
-        
+            
         # 4. Language Routing
         builder.add_conditional_edges(
             "script_finalized",
@@ -82,7 +62,9 @@ class BriefingWorkflow:
             }
         )
         
+        # Ensure translation reconnects to audio generation
         builder.add_edge("translator", "audio_producer")
+    
         builder.add_edge("audio_producer", "notify")
         builder.add_edge("notify", END)
 

@@ -1,4 +1,5 @@
 import redis
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,8 +23,14 @@ scheduler = AsyncIOScheduler()
 async def run_briefing_cycle():
     """
     Checks for due briefings every minute.
+    Run synchronous DB/Redis logic in a thread pool to avoid blocking the event loop.
     """
-    check_briefing_schedules(db, redis_client)
+    try:
+        loop = asyncio.get_running_loop()
+        # run_in_executor(None, ...) uses the default ThreadPoolExecutor
+        await loop.run_in_executor(None, check_briefing_schedules, db, redis_client)
+    except Exception as e:
+        print(f"[SCHEDULER LOOP ERROR] {e}")
 
 # --- Lifecycle ---
 @asynccontextmanager
@@ -69,11 +76,17 @@ async def upsert_briefing_schedule(request: BriefingScheduleRequest):
         language=request.language
     )
     
-    result = collection.update_one(
-        {"_id": request.user_id},
-        {"$set": schedule_entry.dict(by_alias=True, exclude={"id", "last_run_date"})},
-        upsert=True
-    )
+    # Run DB write in thread pool to be safe
+    loop = asyncio.get_running_loop()
+    
+    def _update_db():
+        return collection.update_one(
+            {"_id": request.user_id},
+            {"$set": schedule_entry.dict(by_alias=True, exclude={"id", "last_run_date"})},
+            upsert=True
+        )
+
+    result = await loop.run_in_executor(None, _update_db)
     
     action = "Created" if result.upserted_id else "Updated"
     return {
@@ -86,7 +99,9 @@ async def health_check():
     # Basic connectivity check
     db_status = "connected"
     try:
-        client.admin.command('ping')
+        # Run ping in executor to ensure health check doesn't block
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, client.admin.command, 'ping')
     except Exception:
         db_status = "disconnected"
 
@@ -94,8 +109,6 @@ async def health_check():
         "status": "healthy" if db_status == "connected" else "unhealthy",
         "database": db_status,
         "scheduler": "running" if scheduler.running else "stopped",
-        "browserless": "N/A", # Not used in this service
-        "main_api": "N/A",
         "timestamp": datetime.utcnow()
     }
 
